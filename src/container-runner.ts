@@ -85,6 +85,11 @@ function buildVolumeMounts(
       });
     }
 
+    // Ensure uploads directory exists before container starts
+    // This is critical for file attachments to be visible inside the container
+    const uploadsDir = path.join(groupDir, 'uploads');
+    fs.mkdirSync(uploadsDir, { recursive: true });
+
     // Main also gets its group folder as the working directory
     mounts.push({
       hostPath: groupDir,

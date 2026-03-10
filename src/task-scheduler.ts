@@ -128,10 +128,26 @@ async function runTask(
   };
 
   try {
+    // Inject current date/time into the prompt so the agent knows what "today" means
+    const now = new Date();
+    const currentDate = now.toLocaleDateString('zh-CN', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      weekday: 'long',
+      timeZone: TIMEZONE,
+    });
+    const currentTime = now.toLocaleTimeString('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: TIMEZONE,
+    });
+    const promptWithContext = `[当前时间：${currentDate} ${currentTime}]\n\n${task.prompt}`;
+
     const output = await runContainerAgent(
       group,
       {
-        prompt: task.prompt,
+        prompt: promptWithContext,
         sessionId,
         groupFolder: task.group_folder,
         chatJid: task.chat_jid,

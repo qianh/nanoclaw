@@ -163,7 +163,11 @@ export class GroupQueue {
       const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`;
       const filepath = path.join(inputDir, filename);
       const tempPath = `${filepath}.tmp`;
-      fs.writeFileSync(tempPath, JSON.stringify({ type: 'message', text }));
+      // Include chatJid so container knows where to send replies
+      fs.writeFileSync(
+        tempPath,
+        JSON.stringify({ type: 'message', text, chatJid: groupJid }),
+      );
       fs.renameSync(tempPath, filepath);
       return true;
     } catch {

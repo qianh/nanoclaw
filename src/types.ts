@@ -40,6 +40,7 @@ export interface RegisteredGroup {
   containerConfig?: ContainerConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
+  currentSession?: string; // Current session ID (default: 'default')
 }
 
 export interface NewMessage {
@@ -104,4 +105,10 @@ export type OnChatMetadata = (
   name?: string,
   channel?: string,
   isGroup?: boolean,
+) => void;
+
+// Callback for auto-registering a chat (used by C2C/private chat channels)
+export type OnRegisterGroup = (
+  chatJid: string,
+  group: RegisteredGroup,
 ) => void;

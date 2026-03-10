@@ -297,6 +297,7 @@ function shouldClose(): boolean {
 /**
  * Drain all pending IPC input messages.
  * Returns messages found, or empty array.
+ * Also updates NANOCLAW_CHAT_JID env var if message contains a new chatJid.
  */
 function drainIpcInput(): string[] {
   try {
@@ -313,6 +314,11 @@ function drainIpcInput(): string[] {
         fs.unlinkSync(filePath);
         if (data.type === 'message' && data.text) {
           messages.push(data.text);
+          // Update chatJid if provided (for Discord threads)
+          if (data.chatJid && data.chatJid !== process.env.NANOCLAW_CHAT_JID) {
+            log(`Updating chatJid from ${process.env.NANOCLAW_CHAT_JID} to ${data.chatJid}`);
+            process.env.NANOCLAW_CHAT_JID = data.chatJid;
+          }
         }
       } catch (err) {
         log(`Failed to process input file ${file}: ${err instanceof Error ? err.message : String(err)}`);

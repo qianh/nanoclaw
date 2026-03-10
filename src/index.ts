@@ -27,6 +27,7 @@ import {
   getAllRegisteredGroups,
   getAllSessions,
   getAllTasks,
+  getDiscordThreadMessages,
   getMessagesSince,
   getNewMessages,
   getRouterState,
@@ -133,7 +134,22 @@ export function _setRegisteredGroups(
  * Called by the GroupQueue when it's this group's turn.
  */
 async function processGroupMessages(chatJid: string): Promise<boolean> {
-  const group = registeredGroups[chatJid];
+  let group = registeredGroups[chatJid];
+
+  // For Discord threads, find the registered parent channel
+  if (!group && chatJid.startsWith('dc:')) {
+    const discordJids = Object.keys(registeredGroups).filter((j) =>
+      j.startsWith('dc:'),
+    );
+    if (discordJids.length > 0) {
+      group = registeredGroups[discordJids[0]];
+      logger.info(
+        { chatJid, parentJid: discordJids[0] },
+        'Thread message mapped to parent in processGroupMessages',
+      );
+    }
+  }
+
   if (!group) return true;
 
   const channel = findChannel(channels, chatJid);
@@ -345,16 +361,38 @@ async function startMessageLoop(): Promise<void> {
         ASSISTANT_NAME,
       );
 
-      if (messages.length > 0) {
-        logger.info({ count: messages.length }, 'New messages');
+      // Also fetch Discord thread messages (threads have their own IDs but inherit from parent channel)
+      const discordJids = jids.filter((j) => j.startsWith('dc:'));
+      const { messages: threadMessages } = getDiscordThreadMessages(
+        discordJids,
+        lastTimestamp,
+        ASSISTANT_NAME,
+      );
+
+      // Combine and sort all messages by timestamp
+      const allMessages = [...messages, ...threadMessages].sort((a, b) =>
+        a.timestamp.localeCompare(b.timestamp),
+      );
+
+      // Update timestamp from combined messages
+      let combinedNewTimestamp = newTimestamp;
+      for (const msg of threadMessages) {
+        if (msg.timestamp > combinedNewTimestamp) {
+          combinedNewTimestamp = msg.timestamp;
+        }
+      }
+
+      if (allMessages.length > 0) {
+        logger.info({ count: allMessages.length, threadCount: threadMessages.length }, 'New messages');
 
         // Advance the "seen" cursor for all messages immediately
-        lastTimestamp = newTimestamp;
+        lastTimestamp = combinedNewTimestamp;
         saveState();
 
         // Deduplicate by group
+        // For Discord threads, we need to map thread messages to their parent channel
         const messagesByGroup = new Map<string, NewMessage[]>();
-        for (const msg of messages) {
+        for (const msg of allMessages) {
           const existing = messagesByGroup.get(msg.chat_jid);
           if (existing) {
             existing.push(msg);
@@ -363,15 +401,36 @@ async function startMessageLoop(): Promise<void> {
           }
         }
 
+        logger.info({ groupCount: messagesByGroup.size, groups: [...messagesByGroup.keys()] }, 'Messages by group');
+
         for (const [chatJid, groupMessages] of messagesByGroup) {
-          const group = registeredGroups[chatJid];
-          if (!group) continue;
+          // For Discord threads, find the registered parent channel
+          let group = registeredGroups[chatJid];
+          // Thread messages have their own chatJid but should use parent's settings
+          const isDiscordThread = chatJid.startsWith('dc:') && !group;
+          if (isDiscordThread) {
+            logger.info({ chatJid, discordJids }, 'Processing Discord thread message');
+            // Find the parent Discord channel - threads inherit from parent
+            // For simplicity, we'll use the first registered Discord channel as parent
+            // In practice, threads should only be in channels that are registered
+            const parentJid = discordJids[0];
+            if (parentJid) {
+              group = registeredGroups[parentJid];
+              logger.info({ chatJid, parentJid, foundGroup: !!group }, 'Mapped thread to parent channel');
+            }
+          }
+          if (!group) {
+            logger.info({ chatJid }, 'No group found for chatJid, skipping');
+            continue;
+          }
 
           const channel = findChannel(channels, chatJid);
           if (!channel) {
             logger.warn({ chatJid }, 'No channel owns JID, skipping messages');
             continue;
           }
+
+          logger.info({ chatJid, isMain: group.isMain }, 'Found channel, checking trigger');
 
           const isMainGroup = group.isMain === true;
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
@@ -398,7 +457,7 @@ async function startMessageLoop(): Promise<void> {
           const formatted = formatMessages(messagesToSend);
 
           if (queue.sendMessage(chatJid, formatted)) {
-            logger.debug(
+            logger.info(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
             );
@@ -413,6 +472,7 @@ async function startMessageLoop(): Promise<void> {
               );
           } else {
             // No active container — enqueue for a new one
+            logger.info({ chatJid, count: messagesToSend.length }, 'No active container, enqueueing for new one');
             queue.enqueueMessageCheck(chatJid);
           }
         }
@@ -474,6 +534,7 @@ async function main(): Promise<void> {
       isGroup?: boolean,
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
+    registerGroup: (jid: string, group: RegisteredGroup) => registerGroup(jid, group),
   };
 
   // Create and connect all registered channels.
@@ -489,8 +550,15 @@ async function main(): Promise<void> {
       );
       continue;
     }
-    channels.push(channel);
-    await channel.connect();
+    try {
+      await channel.connect();
+      channels.push(channel);
+    } catch (err) {
+      logger.error(
+        { channel: channelName, err },
+        'Failed to connect channel, skipping',
+      );
+    }
   }
   if (channels.length === 0) {
     logger.fatal('No channels connected');

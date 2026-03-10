@@ -2,6 +2,7 @@ import {
   Channel,
   OnInboundMessage,
   OnChatMetadata,
+  OnRegisterGroup,
   RegisteredGroup,
 } from '../types.js';
 
@@ -9,6 +10,7 @@ export interface ChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  registerGroup?: OnRegisterGroup;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

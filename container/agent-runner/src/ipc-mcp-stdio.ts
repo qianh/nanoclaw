@@ -16,9 +16,14 @@ const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 
 // Context from environment variables (set by the agent runner)
-const chatJid = process.env.NANOCLAW_CHAT_JID!;
+// chatJid can be updated dynamically when processing IPC messages from different threads
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
 const isMain = process.env.NANOCLAW_IS_MAIN === '1';
+
+// Get current chatJid from environment (may be updated during session)
+function getChatJid(): string {
+  return process.env.NANOCLAW_CHAT_JID || '';
+}
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -49,7 +54,7 @@ server.tool(
   async (args) => {
     const data: Record<string, string | undefined> = {
       type: 'message',
-      chatJid,
+      chatJid: getChatJid(),
       text: args.text,
       sender: args.sender || undefined,
       groupFolder,
@@ -128,7 +133,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     }
 
     // Non-main groups can only schedule for themselves
-    const targetJid = isMain && args.target_group_jid ? args.target_group_jid : chatJid;
+    const targetJid = isMain && args.target_group_jid ? args.target_group_jid : getChatJid();
 
     const data = {
       type: 'schedule_task',

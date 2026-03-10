@@ -139,6 +139,15 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* columns already exist */
   }
+
+  // Add current_session column if it doesn't exist (for multi-session support)
+  try {
+    database.exec(
+      `ALTER TABLE registered_groups ADD COLUMN current_session TEXT DEFAULT 'default'`,
+    );
+  } catch {
+    /* column already exists */
+  }
 }
 
 export function initDatabase(): void {
@@ -324,6 +333,45 @@ export function getNewMessages(
   const rows = db
     .prepare(sql)
     .all(lastTimestamp, ...jids, `${botPrefix}:%`) as NewMessage[];
+
+  let newTimestamp = lastTimestamp;
+  for (const row of rows) {
+    if (row.timestamp > newTimestamp) newTimestamp = row.timestamp;
+  }
+
+  return { messages: rows, newTimestamp };
+}
+
+/**
+ * Get Discord thread messages that belong to registered parent channels.
+ * Discord threads have their own chat_jid (dc:threadId) but should be
+ * processed under their parent channel's registration.
+ */
+export function getDiscordThreadMessages(
+  parentChannelIds: string[],
+  lastTimestamp: string,
+  botPrefix: string,
+): { messages: NewMessage[]; newTimestamp: string } {
+  if (parentChannelIds.length === 0) {
+    return { messages: [], newTimestamp: lastTimestamp };
+  }
+
+  // Get all Discord messages that are NOT from registered channels
+  // These are likely thread messages
+  const sql = `
+    SELECT id, chat_jid, sender, sender_name, content, timestamp
+    FROM messages
+    WHERE timestamp > ?
+      AND chat_jid LIKE 'dc:%'
+      AND chat_jid NOT IN (${parentChannelIds.map(() => '?').join(',')})
+      AND is_bot_message = 0 AND content NOT LIKE ?
+      AND content != '' AND content IS NOT NULL
+    ORDER BY timestamp
+  `;
+
+  const rows = db
+    .prepare(sql)
+    .all(lastTimestamp, ...parentChannelIds, `${botPrefix}:%`) as NewMessage[];
 
   let newTimestamp = lastTimestamp;
   for (const row of rows) {
@@ -598,6 +646,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     container_config: string | null;
     requires_trigger: number | null;
     is_main: number | null;
+    current_session: string | null;
   }>;
   const result: Record<string, RegisteredGroup> = {};
   for (const row of rows) {
@@ -619,9 +668,16 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
       requiresTrigger:
         row.requires_trigger === null ? undefined : row.requires_trigger === 1,
       isMain: row.is_main === 1 ? true : undefined,
+      currentSession: row.current_session || 'default',
     };
   }
   return result;
+}
+
+export function setCurrentSession(jid: string, sessionId: string): void {
+  db.prepare(
+    'UPDATE registered_groups SET current_session = ? WHERE jid = ?',
+  ).run(sessionId, jid);
 }
 
 // --- JSON migration ---
