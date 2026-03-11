@@ -4,6 +4,7 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
+  DATA_DIR,
   IDLE_TIMEOUT,
   POLL_INTERVAL,
   TIMEZONE,
@@ -39,6 +40,7 @@ import {
   initDatabase,
   setRegisteredGroup,
   setRouterState,
+  deleteSession,
   setSession,
   storeChatMetadata,
   storeMessage,
@@ -232,10 +234,29 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           : JSON.stringify(result.result);
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
+
+      // Intercept context window limit errors returned as result text
+      const isContextWindowError = text
+        .toLowerCase()
+        .includes('context window limit');
+      if (isContextWindowError) {
+        logger.warn(
+          { group: group.name },
+          'Context window limit in result text, clearing session',
+        );
+        delete sessions[group.folder];
+        deleteSession(group.folder);
+        await channel.sendMessage(
+          chatJid,
+          '上下文已满，会话已重置。如需继续，请重新发送问题。',
+        );
         outputSentToUser = true;
+      } else {
+        logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
+        if (text) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
@@ -283,7 +304,31 @@ async function runAgent(
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
-  const sessionId = sessions[group.folder];
+  let sessionId = sessions[group.folder];
+
+  // Guard against "ghost sessions": a session ID saved to DB but whose
+  // .jsonl transcript file was never created (e.g. container crashed mid-init).
+  // Resuming a non-existent session causes immediate error_during_execution.
+  if (sessionId) {
+    const sessionFile = path.join(
+      DATA_DIR,
+      'sessions',
+      group.folder,
+      '.claude',
+      'projects',
+      '-workspace-group',
+      `${sessionId}.jsonl`,
+    );
+    if (!fs.existsSync(sessionFile)) {
+      logger.warn(
+        { group: group.name, sessionId, sessionFile },
+        'Session file not found on disk, clearing ghost session',
+      );
+      delete sessions[group.folder];
+      deleteSession(group.folder);
+      sessionId = '';
+    }
+  }
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();

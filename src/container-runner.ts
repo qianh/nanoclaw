@@ -2,7 +2,7 @@
  * Container Runner for NanoClaw
  * Spawns agent execution in containers and handles IPC
  */
-import { ChildProcess, exec, spawn } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -23,9 +23,9 @@ import {
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
   readonlyMountArgs,
-  stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -143,6 +143,10 @@ function buildVolumeMounts(
             // Enable Claude's memory feature (persists user preferences between sessions)
             // https://code.claude.com/docs/en/memory#manage-auto-memory
             CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
+            // Disable non-essential traffic (telemetry, metrics, etc.)
+            // Prevents SDK from making hardcoded calls to api.anthropic.com
+            // which would fail with 401 when using a custom API endpoint
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
           },
         },
         null,
@@ -171,9 +175,9 @@ function buildVolumeMounts(
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
-  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
+  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true, mode: 0o700 });
+  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true, mode: 0o700 });
+  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true, mode: 0o700 });
   mounts.push({
     hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',
@@ -241,6 +245,12 @@ function buildContainerArgs(
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // Pass optional third-party API keys (read fresh from .env each call)
+  const thirdPartyKeys = readEnvFile(['TAVILY_API_KEY']);
+  if (thirdPartyKeys.TAVILY_API_KEY) {
+    args.push('-e', `TAVILY_API_KEY=${thirdPartyKeys.TAVILY_API_KEY}`);
   }
 
   // Runtime-specific args for host gateway resolution
@@ -418,14 +428,28 @@ export async function runContainerAgent(
         { group: group.name, containerName },
         'Container timeout, stopping gracefully',
       );
-      exec(stopContainer(containerName), { timeout: 15000 }, (err) => {
-        if (err) {
+      const stopProc = spawn(CONTAINER_RUNTIME_BIN, ['stop', containerName]);
+      const stopTimer = setTimeout(() => {
+        stopProc.kill();
+        container.kill('SIGKILL');
+      }, 15000);
+      stopProc.on('close', (code) => {
+        clearTimeout(stopTimer);
+        if (code !== 0) {
           logger.warn(
-            { group: group.name, containerName, err },
+            { group: group.name, containerName },
             'Graceful stop failed, force killing',
           );
           container.kill('SIGKILL');
         }
+      });
+      stopProc.on('error', (err) => {
+        clearTimeout(stopTimer);
+        logger.warn(
+          { group: group.name, containerName, err },
+          'Graceful stop failed, force killing',
+        );
+        container.kill('SIGKILL');
       });
     };
 

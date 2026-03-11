@@ -1,0 +1,177 @@
+#!/bin/bash
+# Web search using Tavily (preferred) or DuckDuckGo+Wikipedia fallback
+# Usage: web-search "<query>" [max_results]
+
+QUERY="${1:-}"
+MAX_RESULTS="${2:-5}"
+
+if [ -z "$QUERY" ]; then
+    echo "Usage: web-search \"<query>\" [max_results]"
+    exit 1
+fi
+
+echo "Search results for: $QUERY"
+echo ""
+
+# URL encode using python3
+ENCODED_QUERY=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$QUERY" 2>/dev/null)
+
+# Detect Chinese
+IS_CHINESE=$(python3 -c "
+import sys
+q = sys.argv[1]
+has_chinese = any('\u4e00' <= c <= '\u9fff' for c in q)
+print('1' if has_chinese else '0')
+" "$QUERY" 2>/dev/null)
+
+# ── 1. Tavily API (if key is available) ────────────────────────────────────────
+if [ -n "$TAVILY_API_KEY" ]; then
+    TAVILY_RESULT=$(curl -s "https://api.tavily.com/search" \
+        --connect-timeout 10 --max-time 20 \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${TAVILY_API_KEY}" \
+        -d "{\"query\": $(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$QUERY"), \"max_results\": ${MAX_RESULTS}, \"include_answer\": true}" \
+        2>/dev/null)
+
+    if [ -n "$TAVILY_RESULT" ]; then
+        python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+
+    answer = d.get('answer', '')
+    if answer:
+        print('## Answer')
+        print(answer)
+        print()
+
+    results = d.get('results', [])
+    if results:
+        print('## Search Results')
+        for r in results:
+            title = r.get('title', '')
+            url = r.get('url', '')
+            content = r.get('content', '')
+            if title:
+                print(f'### {title}')
+            if url:
+                print(f'URL: {url}')
+            if content:
+                print(content[:500])
+            print()
+except Exception as e:
+    print(f'Parse error: {e}', file=sys.stderr)
+" <<< "$TAVILY_RESULT"
+        echo "Search completed."
+        exit 0
+    fi
+
+    echo "[Tavily API error, falling back to DuckDuckGo+Wikipedia]"
+    echo ""
+fi
+
+# ── 2. DuckDuckGo Instant Answer API (fallback) ────────────────────────────────
+if [ "$IS_CHINESE" = "1" ]; then
+    DDG_URL="https://api.duckduckgo.com/?q=${ENCODED_QUERY}&format=json&no_html=1&skip_disambig=1&kl=cn-zh"
+else
+    DDG_URL="https://api.duckduckgo.com/?q=${ENCODED_QUERY}&format=json&no_html=1&skip_disambig=1"
+fi
+
+DDG_RESULT=$(curl -s "$DDG_URL" --connect-timeout 8 --max-time 12 2>/dev/null)
+
+if [ -n "$DDG_RESULT" ]; then
+    ABSTRACT=$(echo "$DDG_RESULT" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    print(d.get('Abstract', '') or '')
+except: pass
+" 2>/dev/null)
+    ABSTRACT_URL=$(echo "$DDG_RESULT" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    print(d.get('AbstractURL', '') or '')
+except: pass
+" 2>/dev/null)
+
+    if [ -n "$ABSTRACT" ] && [ ${#ABSTRACT} -gt 20 ]; then
+        echo "## Instant Answer (DuckDuckGo)"
+        [ -n "$ABSTRACT_URL" ] && echo "Source: $ABSTRACT_URL"
+        echo ""
+        echo "$ABSTRACT"
+        echo ""
+    fi
+fi
+
+# ── 3. Wikipedia ───────────────────────────────────────────────────────────────
+if [ "$IS_CHINESE" = "1" ]; then
+    WIKI_HOST="zh.wikipedia.org"
+else
+    WIKI_HOST="en.wikipedia.org"
+fi
+
+WIKI_RESULT=$(curl -s "https://${WIKI_HOST}/w/api.php?action=opensearch&search=${ENCODED_QUERY}&limit=${MAX_RESULTS}&format=json" \
+    --connect-timeout 8 --max-time 12 \
+    -H "User-Agent: Mozilla/5.0 (compatible; web-search/1.0)" 2>/dev/null)
+
+if [ -n "$WIKI_RESULT" ]; then
+    WIKI_OUTPUT=$(echo "$WIKI_RESULT" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    titles = data[1] if len(data) > 1 else []
+    urls = data[3] if len(data) > 3 else []
+    for t, u in zip(titles, urls):
+        print(f'- {t}: {u}')
+except: pass
+" 2>/dev/null)
+
+    if [ -n "$WIKI_OUTPUT" ]; then
+        echo "## Wikipedia Results"
+        echo "$WIKI_OUTPUT"
+        echo ""
+    fi
+fi
+
+# ── 4. DuckDuckGo Related Topics ──────────────────────────────────────────────
+if [ -n "$DDG_RESULT" ]; then
+    RELATED=$(echo "$DDG_RESULT" | python3 -c "
+import sys, json, re
+try:
+    d = json.load(sys.stdin)
+    topics = d.get('RelatedTopics', [])
+    count = 0
+    max_r = int(sys.argv[1])
+    for t in topics:
+        if count >= max_r:
+            break
+        if isinstance(t, dict) and t.get('FirstURL'):
+            text = re.sub(r'<[^>]+>', '', t.get('Text', ''))
+            url = t.get('FirstURL', '')
+            if text and url:
+                print(f'- {text.strip()}')
+                print(f'  {url}')
+                count += 1
+        elif isinstance(t, dict) and t.get('Topics'):
+            for sub in t.get('Topics', []):
+                if count >= max_r:
+                    break
+                if isinstance(sub, dict) and sub.get('FirstURL'):
+                    text = re.sub(r'<[^>]+>', '', sub.get('Text', ''))
+                    url = sub.get('FirstURL', '')
+                    if text and url:
+                        print(f'- {text.strip()}')
+                        print(f'  {url}')
+                        count += 1
+except: pass
+" "$MAX_RESULTS" 2>/dev/null)
+
+    if [ -n "$RELATED" ]; then
+        echo "## Related Topics"
+        echo "$RELATED"
+    fi
+fi
+
+echo ""
+echo "Search completed."
