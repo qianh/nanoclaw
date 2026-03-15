@@ -91,6 +91,8 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
+  // Optional: send a file by public URL. fileType: 1=图片 2=视频 3=语音 4=文件
+  sendFile?(jid: string, fileUrl: string, filename: string, fileType?: number, localFilePath?: string): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

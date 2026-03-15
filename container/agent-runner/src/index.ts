@@ -490,6 +490,10 @@ async function main(): Promise<void> {
   // Credentials are injected by the host's credential proxy via ANTHROPIC_BASE_URL.
   // No real secrets exist in the container environment.
   const sdkEnv: Record<string, string | undefined> = { ...process.env };
+  // Expose NanoClaw context to bash tool and subprocesses (e.g. book.py send_file IPC)
+  sdkEnv.NANOCLAW_CHAT_JID = containerInput.chatJid;
+  sdkEnv.NANOCLAW_GROUP_FOLDER = containerInput.groupFolder;
+  sdkEnv.NANOCLAW_IS_MAIN = containerInput.isMain ? '1' : '0';
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');

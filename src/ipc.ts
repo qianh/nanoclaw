@@ -12,6 +12,7 @@ import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendFile?: (jid: string, fileUrl: string, filename: string, fileType?: number, localFilePath?: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -73,7 +74,32 @@ export function startIpcWatcher(deps: IpcDeps): void {
             const filePath = path.join(messagesDir, file);
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              if (data.type === 'message' && data.chatJid && data.text) {
+              if (data.type === 'send_file' && data.chatJid && data.fileUrl && data.filename) {
+                // Send file via channel (e.g. QQ rich media message)
+                const targetGroup = registeredGroups[data.chatJid];
+                if (isMain || (targetGroup && targetGroup.folder === sourceGroup)) {
+                  if (deps.sendFile) {
+                    // Translate container localPath to host path using group mount config
+                    let localFilePath: string | undefined;
+                    if (data.localPath && targetGroup?.containerConfig?.additionalMounts) {
+                      for (const mount of targetGroup.containerConfig.additionalMounts) {
+                        const containerRelPath = mount.containerPath ?? path.basename(mount.hostPath);
+                        const containerAbsPath = `/workspace/extra/${containerRelPath}`;
+                        if (data.localPath.startsWith(containerAbsPath)) {
+                          localFilePath = mount.hostPath + data.localPath.slice(containerAbsPath.length);
+                          break;
+                        }
+                      }
+                    }
+                    await deps.sendFile(data.chatJid, data.fileUrl, data.filename, data.fileType, localFilePath);
+                    logger.info({ chatJid: data.chatJid, filename: data.filename, sourceGroup }, 'IPC file sent');
+                  } else {
+                    logger.warn({ chatJid: data.chatJid, sourceGroup }, 'sendFile not supported by channel');
+                  }
+                } else {
+                  logger.warn({ chatJid: data.chatJid, sourceGroup }, 'Unauthorized IPC send_file attempt blocked');
+                }
+              } else if (data.type === 'message' && data.chatJid && data.text) {
                 // Authorization: verify this group can send to this chatJid
                 const targetGroup = registeredGroups[data.chatJid];
                 if (

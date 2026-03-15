@@ -688,6 +688,212 @@ export class QQGuildChannel implements Channel {
     await this.sendMessageWithRetry(jid, text, false);
   }
 
+  /**
+   * 发送文件消息（需要公网可访问的文件 URL）
+   * @param jid 目标 JID
+   * @param fileUrl 文件的公网 URL（QQ 服务端去拉取）
+   * @param filename 文件名（用于展示）
+   * @param fileType 1=图片 2=视频 3=语音 4=文件（默认 4）
+   */
+  async sendFile(jid: string, fileUrl: string, filename: string, fileType = 4, localFilePath?: string): Promise<void> {
+    await this.sendFileWithRetry(jid, fileUrl, filename, fileType, false, localFilePath);
+  }
+
+  private async sendFileWithRetry(
+    jid: string,
+    fileUrl: string,
+    filename: string,
+    fileType: number,
+    isRetry: boolean,
+    localFilePath?: string,
+  ): Promise<void> {
+    try {
+      if (jid.startsWith('qq:c2c:')) {
+        // 私聊：先上传获取 file_info，再发富媒体消息
+        const parts = jid.replace(/^qq:c2c:/, '').split(':');
+        const openid = parts.length > 1 ? parts[1] : parts[0];
+
+        // If we have a local file, always use base64 upload for correct filename handling
+        if (localFilePath) {
+          return this.sendFileViaBase64(jid, localFilePath, filename, fileType);
+        }
+
+        // 第一步：上传文件
+        const uploadRes = await fetch(`${this.apiBase}/v2/users/${openid}/files`, {
+          method: 'POST',
+          headers: {
+            Authorization: this.authHeader,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            file_type: fileType,
+            url: fileUrl,
+            srv_send_msg: false,
+          }),
+        });
+
+        if (!uploadRes.ok) {
+          const error = await uploadRes.text();
+          if (!isRetry && error.includes('token not exist or expire')) {
+            this.accessToken = await this.fetchAccessToken();
+            return this.sendFileWithRetry(jid, fileUrl, filename, fileType, true, localFilePath);
+          }
+          // If URL download failed and we have a local file, try file_data (base64) upload
+          if (localFilePath && (error.includes('850011') || error.includes('download file error'))) {
+            logger.info({ jid, localFilePath }, 'URL upload failed, trying file_data base64 upload');
+            return this.sendFileViaBase64(jid, localFilePath, filename, fileType);
+          }
+          logger.error({ jid, status: uploadRes.status, error }, 'Failed to upload QQ C2C file');
+          return;
+        }
+
+        const uploadData = (await uploadRes.json()) as { file_info?: string };
+        if (!uploadData.file_info) {
+          logger.error({ jid, uploadData }, 'QQ C2C file upload returned no file_info');
+          return;
+        }
+
+        // 第二步：发送富媒体消息
+        const sendRes = await fetch(`${this.apiBase}/v2/users/${openid}/messages`, {
+          method: 'POST',
+          headers: {
+            Authorization: this.authHeader,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            content: filename,
+            msg_type: 7, // 富媒体
+            media: { file_info: uploadData.file_info },
+          }),
+        });
+
+        if (!sendRes.ok) {
+          const error = await sendRes.text();
+          logger.error({ jid, status: sendRes.status, error }, 'Failed to send QQ C2C file message');
+          return;
+        }
+
+        logger.info({ jid, filename, fileType, botId: this.appId }, 'QQ C2C file sent');
+      } else {
+        // 频道：先上传获取 file_info，再发富媒体消息
+        const channelId = jid.replace(/^qq:/, '');
+
+        // 第一步：上传文件
+        const uploadRes = await fetch(`${this.apiBase}/v2/channels/${channelId}/files`, {
+          method: 'POST',
+          headers: {
+            Authorization: this.authHeader,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            file_type: fileType,
+            url: fileUrl,
+            srv_send_msg: false,
+          }),
+        });
+
+        if (!uploadRes.ok) {
+          const error = await uploadRes.text();
+          if (!isRetry && error.includes('token not exist or expire')) {
+            this.accessToken = await this.fetchAccessToken();
+            return this.sendFileWithRetry(jid, fileUrl, filename, fileType, true);
+          }
+          logger.error({ jid, status: uploadRes.status, error }, 'Failed to upload QQ Guild file');
+          return;
+        }
+
+        const uploadData = (await uploadRes.json()) as { file_info?: string };
+        if (!uploadData.file_info) {
+          logger.error({ jid, uploadData }, 'QQ Guild file upload returned no file_info');
+          return;
+        }
+
+        // 第二步：发送富媒体消息
+        const sendRes = await fetch(`${this.apiBase}/channels/${channelId}/messages`, {
+          method: 'POST',
+          headers: {
+            Authorization: this.authHeader,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            content: filename,
+            msg_type: 7,
+            media: { file_info: uploadData.file_info },
+          }),
+        });
+
+        if (!sendRes.ok) {
+          const error = await sendRes.text();
+          logger.error({ jid, status: sendRes.status, error }, 'Failed to send QQ Guild file message');
+          return;
+        }
+
+        logger.info({ jid, filename, fileType, botId: this.appId }, 'QQ Guild file sent');
+      }
+    } catch (err) {
+      logger.error({ jid, err }, 'Failed to send QQ file');
+    }
+  }
+
+  private async sendFileViaBase64(jid: string, localFilePath: string, filename: string, fileType: number): Promise<void> {
+    try {
+      const fileBuffer = fs.readFileSync(localFilePath);
+      const fileData = fileBuffer.toString('base64');
+
+      const parts = jid.replace(/^qq:c2c:/, '').split(':');
+      const openid = parts.length > 1 ? parts[1] : parts[0];
+
+      const uploadRes = await fetch(`${this.apiBase}/v2/users/${openid}/files`, {
+        method: 'POST',
+        headers: {
+          Authorization: this.authHeader,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          file_type: fileType,
+          file_data: fileData,
+          file_name: filename,
+          srv_send_msg: false,
+        }),
+      });
+
+      if (!uploadRes.ok) {
+        const error = await uploadRes.text();
+        logger.error({ jid, status: uploadRes.status, error }, 'Failed to upload QQ C2C file via base64');
+        return;
+      }
+
+      const uploadData = (await uploadRes.json()) as { file_info?: string };
+      if (!uploadData.file_info) {
+        logger.error({ jid, uploadData }, 'QQ C2C base64 file upload returned no file_info');
+        return;
+      }
+
+      const sendRes = await fetch(`${this.apiBase}/v2/users/${openid}/messages`, {
+        method: 'POST',
+        headers: {
+          Authorization: this.authHeader,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          content: filename,
+          msg_type: 7,
+          media: { file_info: uploadData.file_info },
+        }),
+      });
+
+      if (!sendRes.ok) {
+        const error = await sendRes.text();
+        logger.error({ jid, status: sendRes.status, error }, 'Failed to send QQ C2C file message (base64)');
+        return;
+      }
+
+      logger.info({ jid, filename, fileType }, 'QQ C2C file sent via base64');
+    } catch (err) {
+      logger.error({ jid, localFilePath, err }, 'Failed to send QQ file via base64');
+    }
+  }
+
   private async sendMessageWithRetry(jid: string, text: string, isRetry: boolean): Promise<void> {
     try {
       // 区分频道消息和私聊消息
@@ -893,6 +1099,28 @@ class MultiQQGuildChannel implements Channel {
       }
     }
     logger.error({ jid }, 'All QQ bots failed to send message');
+  }
+
+  async sendFile(jid: string, fileUrl: string, filename: string, fileType?: number, localFilePath?: string): Promise<void> {
+    const botId = this.extractBotId(jid);
+    if (botId) {
+      const bot = this.botById.get(botId);
+      if (bot) {
+        await bot.sendFile(jid, fileUrl, filename, fileType, localFilePath);
+        return;
+      }
+      logger.warn({ jid, botId }, 'Bot ID not found for JID, trying all bots');
+    }
+
+    for (const bot of this.bots) {
+      try {
+        await bot.sendFile(jid, fileUrl, filename, fileType, localFilePath);
+        return;
+      } catch (err) {
+        logger.debug({ jid, err }, 'Failed to send file with bot, trying next');
+      }
+    }
+    logger.error({ jid }, 'All QQ bots failed to send file');
   }
 
   isConnected(): boolean {
