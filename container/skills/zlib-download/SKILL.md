@@ -102,18 +102,24 @@ The typical flow is: **search → pick → download**.
 
 ### 1. Search
 
+**IMPORTANT: Always search PDF first.** QQ C2C only supports sending PDF files. EPUB will be auto-converted, but PDF is preferred. Use this two-step strategy:
+
 ```bash
-# Auto-detect backend (tries zlib first, then annas)
-python3 ${SKILL_PATH}/scripts/book.py search "machine learning" --limit 10
+# Step 1: Search PDF first
+python3 ${SKILL_PATH}/scripts/book.py search "书名" --source zlib --ext pdf --limit 10
 
-# Z-Library with filters
-python3 ${SKILL_PATH}/scripts/book.py search "deep learning" --source zlib --lang english --ext pdf --limit 5
+# Step 2: Only if no PDF results, search without format filter
+python3 ${SKILL_PATH}/scripts/book.py search "书名" --source zlib --limit 10
+```
 
+If the user ends up with an EPUB, `book.py` will automatically convert it to PDF via `ebook-convert` before sending. No manual action needed.
+
+```bash
 # Anna's Archive
 python3 ${SKILL_PATH}/scripts/book.py search "reinforcement learning" --source annas
 
-# Chinese books
-python3 ${SKILL_PATH}/scripts/book.py search "莱姆 索拉里斯" --source zlib --lang chinese --limit 5
+# Chinese books — always PDF first
+python3 ${SKILL_PATH}/scripts/book.py search "莱姆 索拉里斯" --source zlib --lang chinese --ext pdf --limit 5
 ```
 
 **Output** (JSON to stdout):
@@ -176,10 +182,13 @@ python3 ${SKILL_PATH}/scripts/book.py download --source annas --hash a1b2c3d4e5 
 
 After download, report:
 - Book title and author
-- File size
-- Any remaining download quota (Z-Library has daily limits)
+- File size and format
+- Whether the file was pushed to QQ chat
 
-Do NOT mention file paths (local container paths are irrelevant to the user).
+If the output hint contains "PDF too large for QQ direct push", tell the user:
+> 文件已下载，但因转换后 PDF 超过 QQ 推送限制（14MB），无法直接发送到聊天框。文件已保存到本地，可在 `/Users/john/private/ai/books/` 目录找到。
+
+Do NOT mention container file paths (e.g. `/workspace/...`). Always refer to the host path `/Users/john/private/ai/books/`.
 
 ## Other Commands
 

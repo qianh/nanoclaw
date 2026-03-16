@@ -175,6 +175,77 @@ def zlib_info(args):
     output(result)
 
 
+def _epub_to_pdf(epub_path: Path) -> "Path | None":
+    """Convert EPUB to PDF. Returns PDF path, or None if conversion unavailable.
+
+    Strategy A (preferred): EPUB → HTMLZ → Chromium headless PDF.
+      Chromium uses system NotoSansCJK with proper TrueType subsetting,
+      producing small PDFs (~4-8 MB) even for Chinese books.
+
+    Strategy B (fallback): direct ebook-convert EPUB → PDF.
+      Calibre embeds CJK as Type3 bitmaps (~20+ MB). Compressed with
+      ghostscript if available, but still likely large for CJK content.
+    """
+    import shutil, tempfile, zipfile as _zipfile
+
+    pdf_path = epub_path.with_suffix(".pdf")
+
+    # --- Strategy A: EPUB → HTMLZ → Chromium PDF ---
+    chromium = os.environ.get("AGENT_BROWSER_EXECUTABLE_PATH") or shutil.which("chromium")
+    if chromium and shutil.which("ebook-convert"):
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmpdir_path = Path(tmpdir)
+                htmlz = tmpdir_path / "book.htmlz"
+                r1 = subprocess.run(
+                    ["ebook-convert", str(epub_path), str(htmlz)],
+                    capture_output=True, timeout=120,
+                )
+                if r1.returncode == 0 and htmlz.exists():
+                    html_dir = tmpdir_path / "html"
+                    with _zipfile.ZipFile(htmlz) as z:
+                        z.extractall(html_dir)
+                    index = html_dir / "index.html"
+                    if index.exists():
+                        r2 = subprocess.run(
+                            [chromium, "--headless", "--no-sandbox", "--disable-gpu",
+                             f"--print-to-pdf={pdf_path}",
+                             "--print-to-pdf-no-header",
+                             "--run-all-compositor-stages-before-draw",
+                             f"file://{index}"],
+                            capture_output=True, timeout=120,
+                        )
+                        if r2.returncode == 0 and pdf_path.exists() and pdf_path.stat().st_size > 0:
+                            return pdf_path
+        except Exception:
+            pass
+
+    # --- Strategy B: calibre direct + ghostscript compression ---
+    if shutil.which("ebook-convert"):
+        try:
+            result = subprocess.run(
+                ["ebook-convert", str(epub_path), str(pdf_path)],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode == 0 and pdf_path.exists():
+                if shutil.which("gs"):
+                    compressed = pdf_path.with_name(pdf_path.stem + "_c.pdf")
+                    gs_result = subprocess.run(
+                        ["gs", "-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.4",
+                         "-dPDFSETTINGS=/screen", "-dNOPAUSE", "-dQUIET", "-dBATCH",
+                         f"-sOutputFile={compressed}", str(pdf_path)],
+                        capture_output=True, timeout=120,
+                    )
+                    if gs_result.returncode == 0 and compressed.exists():
+                        pdf_path.unlink()
+                        compressed.rename(pdf_path)
+                return pdf_path
+        except Exception:
+            pass
+
+    return None
+
+
 def _send_file_ipc(file_url: str, filename: str, file_type: int = 4, local_path: str = ""):
     """Write a send_file IPC message so NanoClaw delivers the file via the channel."""
     import time
@@ -213,11 +284,34 @@ def zlib_download(args):
     filepath = out_dir / filename
     filepath.write_bytes(content)
 
-    # Automatically send file to chat via IPC (if running inside NanoClaw)
-    _send_file_ipc(ddl, filename, local_path=str(filepath))
+    # Convert EPUB to PDF for QQ delivery (QQ C2C base64 upload only supports PDF)
+    # QQ base64 upload limit is ~14 MB; skip push if converted PDF exceeds that.
+    QQ_SIZE_LIMIT = 14 * 1024 * 1024
+    send_path = filepath
+    send_filename = filename
+    converted = False
+    skip_push = False
+    if filepath.suffix.lower() == ".epub":
+        pdf_path = _epub_to_pdf(filepath)
+        if pdf_path:
+            if pdf_path.stat().st_size > QQ_SIZE_LIMIT:
+                skip_push = True
+            else:
+                send_path = pdf_path
+                send_filename = pdf_path.name
+                converted = True
 
-    output({"source": "zlib", "status": "ok", "path": str(filepath), "size": len(content), "url": ddl},
-           hint=f"Downloaded to {filepath}")
+    # Automatically send file to chat via IPC (if running inside NanoClaw)
+    if not skip_push:
+        _send_file_ipc(ddl, send_filename, local_path=str(send_path))
+
+    result = {"source": "zlib", "status": "ok", "path": str(filepath), "size": len(content), "url": ddl}
+    hint = f"Downloaded to {filepath}"
+    if converted:
+        hint += f". Converted EPUB→PDF for QQ delivery"
+    if skip_push:
+        hint += f". PDF too large for QQ direct push (>{QQ_SIZE_LIMIT // 1024 // 1024}MB); file saved locally only"
+    output(result, hint=hint)
 
 
 # ---------------------------------------------------------------------------

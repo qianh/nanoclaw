@@ -26,6 +26,8 @@ RUN apt-get update && apt-get install -y \
     git \
     python3 \
     python3-requests \
+    calibre \
+    ghostscript \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Chromium path for agent-browser

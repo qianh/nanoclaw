@@ -74,7 +74,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
             const filePath = path.join(messagesDir, file);
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              if (data.type === 'send_file' && data.chatJid && data.fileUrl && data.filename) {
+              if (data.type === 'send_file' && data.chatJid && (data.fileUrl || data.localPath) && data.filename) {
                 // Send file via channel (e.g. QQ rich media message)
                 const targetGroup = registeredGroups[data.chatJid];
                 if (isMain || (targetGroup && targetGroup.folder === sourceGroup)) {
