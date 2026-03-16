@@ -175,6 +175,35 @@ def zlib_info(args):
     output(result)
 
 
+def _inject_screen_css(html_path: Path):
+    """Inject CSS into an HTML file to improve screen readability when printed to PDF.
+
+    Overrides @media print styles so Chromium renders with screen-friendly
+    font sizes and margins instead of paper-optimized defaults.
+    """
+    try:
+        content = html_path.read_text(encoding="utf-8", errors="replace")
+        css = (
+            "<style>"
+            "*{background-color:white!important;color:#111!important;}"
+            "body,html{margin:0!important;padding:8px 14px!important;"
+            "font-size:15px!important;line-height:1.7!important;background:white!important;}"
+            "div:empty,p:empty,span:empty{display:none!important;}"
+            "section,article{padding-top:0!important;padding-bottom:0!important;}"
+            "@page{margin:8px 14px!important;}"
+            "</style>"
+        )
+        if "</head>" in content:
+            content = content.replace("</head>", css + "</head>", 1)
+        elif "<body" in content:
+            content = content.replace("<body", css + "<body", 1)
+        else:
+            content = css + content
+        html_path.write_text(content, encoding="utf-8")
+    except Exception:
+        pass  # Non-critical; proceed without injection
+
+
 def _epub_to_pdf(epub_path: Path) -> "Path | None":
     """Convert EPUB to PDF. Returns PDF path, or None if conversion unavailable.
 
@@ -207,10 +236,16 @@ def _epub_to_pdf(epub_path: Path) -> "Path | None":
                         z.extractall(html_dir)
                     index = html_dir / "index.html"
                     if index.exists():
+                        # Inject screen-friendly CSS: override print media,
+                        # remove fixed margins, use readable font size.
+                        _inject_screen_css(index)
                         r2 = subprocess.run(
                             [chromium, "--headless", "--no-sandbox", "--disable-gpu",
                              f"--print-to-pdf={pdf_path}",
                              "--print-to-pdf-no-header",
+                             # ~5×7.5 inch ≈ phone/e-reader aspect ratio
+                             "--print-to-pdf-paper-width=5",
+                             "--print-to-pdf-paper-height=7.5",
                              "--run-all-compositor-stages-before-draw",
                              f"file://{index}"],
                             capture_output=True, timeout=120,
@@ -284,33 +319,17 @@ def zlib_download(args):
     filepath = out_dir / filename
     filepath.write_bytes(content)
 
-    # Convert EPUB to PDF for QQ delivery (QQ C2C base64 upload only supports PDF)
-    # QQ base64 upload limit is ~14 MB; skip push if converted PDF exceeds that.
-    QQ_SIZE_LIMIT = 14 * 1024 * 1024
-    send_path = filepath
-    send_filename = filename
-    converted = False
-    skip_push = False
-    if filepath.suffix.lower() == ".epub":
-        pdf_path = _epub_to_pdf(filepath)
-        if pdf_path:
-            if pdf_path.stat().st_size > QQ_SIZE_LIMIT:
-                skip_push = True
-            else:
-                send_path = pdf_path
-                send_filename = pdf_path.name
-                converted = True
-
-    # Automatically send file to chat via IPC (if running inside NanoClaw)
-    if not skip_push:
-        _send_file_ipc(ddl, send_filename, local_path=str(send_path))
+    # Send file via IPC. QQ base64 upload limit is ~14 MB.
+    # Z-Library downloadLink requires auth headers, so URL-only upload won't work.
+    BASE64_LIMIT = 14 * 1024 * 1024
+    file_size = filepath.stat().st_size
+    if file_size <= BASE64_LIMIT:
+        _send_file_ipc(ddl, filename, local_path=str(filepath))
+        hint = f"Downloaded to {filepath}"
+    else:
+        hint = f"Downloaded to {filepath}. 文件过大（{file_size // 1024 // 1024}MB > 14MB），已保存到本地，无法直接推送到 QQ"
 
     result = {"source": "zlib", "status": "ok", "path": str(filepath), "size": len(content), "url": ddl}
-    hint = f"Downloaded to {filepath}"
-    if converted:
-        hint += f". Converted EPUB→PDF for QQ delivery"
-    if skip_push:
-        hint += f". PDF too large for QQ direct push (>{QQ_SIZE_LIMIT // 1024 // 1024}MB); file saved locally only"
     output(result, hint=hint)
 
 

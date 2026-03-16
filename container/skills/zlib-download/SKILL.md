@@ -102,24 +102,24 @@ The typical flow is: **search → pick → download**.
 
 ### 1. Search
 
-**IMPORTANT: Always search PDF first.** QQ C2C only supports sending PDF files. EPUB will be auto-converted, but PDF is preferred. Use this two-step strategy:
+**IMPORTANT: Always search EPUB first.** EPUB is smaller and renders better on mobile. Use this two-step strategy:
 
 ```bash
-# Step 1: Search PDF first
-python3 ${SKILL_PATH}/scripts/book.py search "书名" --source zlib --ext pdf --limit 10
+# Step 1: Search EPUB first
+python3 ${SKILL_PATH}/scripts/book.py search "书名" --source zlib --ext epub --limit 10
 
-# Step 2: Only if no PDF results, search without format filter
-python3 ${SKILL_PATH}/scripts/book.py search "书名" --source zlib --limit 10
+# Step 2: Only if no EPUB results, fall back to PDF
+python3 ${SKILL_PATH}/scripts/book.py search "书名" --source zlib --ext pdf --limit 10
 ```
 
-If the user ends up with an EPUB, `book.py` will automatically convert it to PDF via `ebook-convert` before sending. No manual action needed.
+EPUB is sent directly without any conversion. No manual action needed.
 
 ```bash
 # Anna's Archive
 python3 ${SKILL_PATH}/scripts/book.py search "reinforcement learning" --source annas
 
-# Chinese books — always PDF first
-python3 ${SKILL_PATH}/scripts/book.py search "莱姆 索拉里斯" --source zlib --lang chinese --ext pdf --limit 5
+# Chinese books — EPUB first
+python3 ${SKILL_PATH}/scripts/book.py search "莱姆 索拉里斯" --source zlib --lang chinese --ext epub --limit 5
 ```
 
 **Output** (JSON to stdout):
@@ -185,8 +185,8 @@ After download, report:
 - File size and format
 - Whether the file was pushed to QQ chat
 
-If the output hint contains "PDF too large for QQ direct push", tell the user:
-> 文件已下载，但因转换后 PDF 超过 QQ 推送限制（14MB），无法直接发送到聊天框。文件已保存到本地，可在 `/Users/john/private/ai/books/` 目录找到。
+If the output hint contains "文件过大", tell the user:
+> 文件已下载，但超过 QQ 推送限制（14MB），无法直接发送到聊天框。文件已保存到本地，可在 `/Users/john/private/ai/books/` 目录找到。
 
 Do NOT mention container file paths (e.g. `/workspace/...`). Always refer to the host path `/Users/john/private/ai/books/`.
 

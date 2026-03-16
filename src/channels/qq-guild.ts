@@ -835,7 +835,7 @@ export class QQGuildChannel implements Channel {
     }
   }
 
-  private async sendFileViaBase64(jid: string, localFilePath: string, filename: string, fileType: number): Promise<void> {
+  private async sendFileViaBase64(jid: string, localFilePath: string, filename: string, fileType: number, isRetry = false): Promise<void> {
     try {
       const fileBuffer = fs.readFileSync(localFilePath);
       const fileData = fileBuffer.toString('base64');
@@ -859,6 +859,10 @@ export class QQGuildChannel implements Channel {
 
       if (!uploadRes.ok) {
         const error = await uploadRes.text();
+        if (!isRetry && error.includes('token not exist or expire')) {
+          this.accessToken = await this.fetchAccessToken();
+          return this.sendFileViaBase64(jid, localFilePath, filename, fileType, true);
+        }
         logger.error({ jid, status: uploadRes.status, error }, 'Failed to upload QQ C2C file via base64');
         return;
       }

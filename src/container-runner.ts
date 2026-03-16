@@ -249,9 +249,27 @@ function buildContainerArgs(
   }
 
   // Pass optional third-party API keys (read fresh from .env each call)
-  const thirdPartyKeys = readEnvFile(['TAVILY_API_KEY']);
+  const thirdPartyKeys = readEnvFile([
+    'TAVILY_API_KEY',
+    'ANTHROPIC_MODEL',
+    'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+    'ANTHROPIC_DEFAULT_SONNET_MODEL',
+    'ANTHROPIC_DEFAULT_OPUS_MODEL',
+  ]);
   if (thirdPartyKeys.TAVILY_API_KEY) {
     args.push('-e', `TAVILY_API_KEY=${thirdPartyKeys.TAVILY_API_KEY}`);
+  }
+  if (thirdPartyKeys.ANTHROPIC_MODEL) {
+    args.push('-e', `ANTHROPIC_MODEL=${thirdPartyKeys.ANTHROPIC_MODEL}`);
+  }
+  if (thirdPartyKeys.ANTHROPIC_DEFAULT_HAIKU_MODEL) {
+    args.push('-e', `ANTHROPIC_DEFAULT_HAIKU_MODEL=${thirdPartyKeys.ANTHROPIC_DEFAULT_HAIKU_MODEL}`);
+  }
+  if (thirdPartyKeys.ANTHROPIC_DEFAULT_SONNET_MODEL) {
+    args.push('-e', `ANTHROPIC_DEFAULT_SONNET_MODEL=${thirdPartyKeys.ANTHROPIC_DEFAULT_SONNET_MODEL}`);
+  }
+  if (thirdPartyKeys.ANTHROPIC_DEFAULT_OPUS_MODEL) {
+    args.push('-e', `ANTHROPIC_DEFAULT_OPUS_MODEL=${thirdPartyKeys.ANTHROPIC_DEFAULT_OPUS_MODEL}`);
   }
 
   // Runtime-specific args for host gateway resolution
