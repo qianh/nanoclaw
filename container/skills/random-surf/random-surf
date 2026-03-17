@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-多多探索调度器 - 只负责时间判断和话题选择
+多多探索调度器 - 只负责时间判断和大类选择
 输出 EXPLORE_NOW 表示需要探索，否则静默退出
+话题由 Claude 实时检索决定
 """
 
 import random
@@ -11,55 +12,12 @@ from datetime import datetime, timedelta
 
 SCHEDULE_FILE = "/workspace/group/discoveries/exploration_schedule.json"
 
-EXPLORATION_POOL = [
-    ("科技前沿", [
-        "量子计算最新突破与商业化进展",
-        "AI大模型架构演进与能力边界",
-        "脑机接口技术的现状与伦理争议",
-        "核聚变能源商业化的最新进展",
-        "CRISPR基因编辑的最新应用与风险",
-        "自动驾驶技术的瓶颈与突破方向",
-        "新型电池技术与储能革命",
-        "量子通信与后量子密码学",
-    ]),
-    ("宇宙与自然", [
-        "黑洞的本质：信息悖论与霍金辐射",
-        "暗物质和暗能量：宇宙中的未知主体",
-        "费米悖论：为什么我们还没发现外星文明",
-        "多重宇宙理论的物理证据与争议",
-        "生命起源之谜：RNA世界假说",
-        "地球极端环境中的生命形式",
-        "气候临界点：不可逆的地球系统变化",
-        "引力波：时空的涟漪与探测",
-    ]),
-    ("人文历史", [
-        "古文明的技术水平为何远超我们想象",
-        "轴心时代：公元前几百年的思想大爆发",
-        "语言如何塑造思维与认知边界",
-        "印刷术如何改变了人类历史进程",
-        "货币的演化史与信任的本质",
-        "历史上被遗忘的伟大文明",
-        "宗教与科学的历史冲突与和解",
-    ]),
-    ("社会与未来", [
-        "人工智能对就业市场的深远影响",
-        "数字化身份、隐私与监控资本主义",
-        "全球化逆转：世界碎片化的后果",
-        "人口老龄化对社会结构的重塑",
-        "技术加速时代的人类适应能力",
-        "社交媒体如何改变了民主与舆论",
-        "元宇宙与现实的边界",
-    ]),
-    ("科学与哲学", [
-        "意识的本质：科学无法解释的难题",
-        "时间是否真实存在：物理学的困惑",
-        "数学的不合理有效性：为何数学描述自然",
-        "混沌理论与蝴蝶效应的深层含义",
-        "博弈论如何解释人类合作与冲突",
-        "认知偏见的进化根源与克服之道",
-        "自由意志与决定论的现代争论",
-        "复杂系统的涌现现象",
-    ]),
+CATEGORIES = [
+    "科技前沿",
+    "宇宙与自然",
+    "人文历史",
+    "社会与未来",
+    "科学与哲学",
 ]
 
 
@@ -87,29 +45,22 @@ def main():
     schedule = load_schedule()
 
     if not should_explore(schedule):
-        # 未到时间，静默退出
         return
 
-    # 随机选择话题
-    category, topics = random.choice(EXPLORATION_POOL)
-    topic = random.choice(topics)
+    category = random.choice(CATEGORIES)
 
-    # 计算下次时间（1-6小时随机）
     next_minutes = random.randint(60, 360)
     next_run = datetime.now() + timedelta(minutes=next_minutes)
 
     save_schedule({
         "next_run": next_run.isoformat(),
         "last_run": datetime.now().isoformat(),
-        "last_topic": topic,
         "last_category": category,
         "interval_minutes": next_minutes,
     })
 
-    # 输出探索信号（供 Claude 读取）
     print("EXPLORE_NOW")
-    print(f"话题:{topic}")
-    print(f"类型:{category}")
+    print(f"大类:{category}")
     print(f"下次探索:{next_run.strftime('%H:%M')}（{next_minutes}分钟后）")
 
 
