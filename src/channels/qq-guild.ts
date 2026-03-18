@@ -106,6 +106,7 @@ export class QQGuildChannel implements Channel {
   private channels: Map<string, QQChannel> = new Map();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
+  private reconnecting = false;
 
   constructor(config: QQGuildConfig, opts: QQGuildChannelOpts) {
     this.appId = config.appId;
@@ -305,9 +306,9 @@ export class QQGuildChannel implements Channel {
         throw new Error(`Failed to get access token: ${response.status}`);
       }
 
-      const data = (await response.json()) as { access_token?: string; expires_in?: number };
+      const data = (await response.json()) as { access_token?: string; expires_in?: number; code?: number; message?: string };
       if (!data.access_token) {
-        throw new Error('No access_token in response');
+        throw new Error(`No access_token in response: ${JSON.stringify(data)}`);
       }
 
       logger.info({ expiresIn: data.expires_in }, 'QQ Guild access token obtained');
@@ -1017,14 +1018,25 @@ export class QQGuildChannel implements Channel {
   }
 
   private scheduleReconnect(): void {
+    // Prevent multiple concurrent reconnect chains
+    if (this.reconnecting) {
+      logger.debug('QQ Guild reconnect already in progress, skipping duplicate');
+      return;
+    }
+
+    this.reconnecting = true;
+    this.reconnectAttempts = 0;
+    this.doReconnect();
+  }
+
+  private doReconnect(): void {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       logger.error(
         { attempts: this.reconnectAttempts },
         'QQ Guild max reconnect attempts reached, will retry in 5 minutes',
       );
-      // 重置计数器，5分钟后再次尝试
       this.reconnectAttempts = 0;
-      setTimeout(() => this.scheduleReconnect(), 5 * 60 * 1000);
+      setTimeout(() => this.doReconnect(), 5 * 60 * 1000);
       return;
     }
 
@@ -1041,10 +1053,11 @@ export class QQGuildChannel implements Channel {
         await this.connect();
         // 连接成功，重置重连计数
         this.reconnectAttempts = 0;
+        this.reconnecting = false;
       } catch (err) {
         logger.error({ err, attempt: this.reconnectAttempts }, 'QQ Guild reconnect failed');
         // 连接失败，继续重试
-        this.scheduleReconnect();
+        this.doReconnect();
       }
     }, delay);
   }
